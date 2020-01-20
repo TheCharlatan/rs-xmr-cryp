@@ -40,12 +40,12 @@ fn challenge_hash(
     hasher.input(key_image.compress().to_bytes());
     hasher.input(response_point.compress().to_bytes());
     hasher.input(response_image.compress().to_bytes());
-    let mut hash_point_bytes: [u8; 32] = hasher.result().as_slice().try_into().expect("wrong length");
+    let hash_point_bytes: [u8; 32] = hasher.result().as_slice().try_into().expect("wrong length");
     scalar::Scalar::from_bytes_mod_order(hash_point_bytes)
 }
 
 fn ring_sig(
-        index: i32,
+        _index: i32,
         message: [u8; 32],
         secret: scalar::Scalar,
         ristretto_public_ring: [ristretto::RistrettoPoint; 10]) -> (scalar::Scalar, [scalar::Scalar; 10], ristretto::RistrettoPoint) {
@@ -79,7 +79,7 @@ fn ring_sig_verify(
         ristretto_public_ring: [ristretto::RistrettoPoint; 10],
         key_image: ristretto::RistrettoPoint) {
     // check for shenanigans against the key image
-    if(constants::BASEPOINT_ORDER * key_image != ristretto::RistrettoPoint::from_uniform_bytes(&[0u8;64])) {
+    if constants::BASEPOINT_ORDER * key_image != ristretto::RistrettoPoint::from_uniform_bytes(&[0u8;64]) {
         panic!();
     }
     let G = constants::RISTRETTO_BASEPOINT_POINT;
@@ -96,20 +96,19 @@ fn ring_sig_verify(
     let verification_image = responses[9] * ring_point_hash + challenges[9] * key_image;
     challenges[0] = challenge_hash(ristretto_public_ring, message, key_image, verification_point, verification_image);
     // check that the ring has indeed been closed
-    if(challenges[0] != challenge) {
+    if challenges[0] != challenge {
         panic!();
     }
     println!("{:?} == {:?}", challenges[0], challenge)
 }
 
 fn main() {
-    let G_RISTRETTO = constants::RISTRETTO_BASEPOINT_POINT;
-    let H  = ristretto_point_hash(G_RISTRETTO);
+    let G = constants::RISTRETTO_BASEPOINT_POINT;
     let message: [u8; 32] = [0u8; 32];
     let ristretto_secret_ring: [scalar::Scalar; 10] = [scalar::Scalar::from_bytes_mod_order_wide(&[OsRng.next_u64() as u8; 64]); 10];
     let mut ristretto_public_ring: [ristretto::RistrettoPoint; 10] = [ristretto::RistrettoPoint::from_uniform_bytes(&[0u8;64]); 10];
     for i in 0..10 {
-        ristretto_public_ring[i] = ristretto_secret_ring[i] * G_RISTRETTO;
+        ristretto_public_ring[i] = ristretto_secret_ring[i] * G;
     }
     let (challenge, responses, key_image) = ring_sig(0, message, ristretto_secret_ring[0], ristretto_public_ring);
     ring_sig_verify(message, challenge, responses, ristretto_public_ring, key_image);

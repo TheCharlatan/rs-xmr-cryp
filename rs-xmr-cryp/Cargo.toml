@@ -10,6 +10,6 @@ edition = "2018"
 version = "1.0.0-pre"
 
 [dependencies]
-rand = "0.7"
+rand_core = "0.5.1"
 curve25519-dalek = "2"
 sha3 = "0.8.2"

@@ -1,56 +1,72 @@
-extern crate rand;
+extern crate rand_core;
 extern crate ed25519_dalek;
 extern crate curve25519_dalek;
 extern crate sha3;
 
-use rand::rngs::OsRng;
-use ed25519_dalek::Keypair;
-use ed25519_dalek::Signature;
-use curve25519_dalek::edwards;
+use std::convert::TryInto;
+use rand_core::{OsRng, RngCore};
 use curve25519_dalek::constants;
 use curve25519_dalek::scalar;
 use curve25519_dalek::ristretto;
-use sha3::{Digest, Keccak256};
+use sha3::{Digest, Keccak512, Keccak256};
 
-fn ge_fromfe_frombytes_vartime(bytes: [u8;64]) -> edwards::EdwardsPoint {
-    type bignum_25519 = [i32;10];
-    let u:bignum_25519 = [0,0,0,0,0,0,0,0,0];
-    let v:bignum_25519 = [0,0,0,0,0,0,0,0,0];
-    let w:bignum_25519 = [0,0,0,0,0,0,0,0,0];
-    let x:bignum_25519 = [0,0,0,0,0,0,0,0,0];
-    let y:bignum_25519 = [0,0,0,0,0,0,0,0,0];
-    let z:bignum_25519 = [0,0,0,0,0,0,0,0,0];
-    let sign:char;
-
-}
-
-fn point_hash(point: edwards::EdwardsPoint) -> edwards::EdwardsPoint {
-    let point_compressed = point.compress();
-    let point_bytes = point_compressed.to_bytes();
-    let mut hasher = Keccak256::new();
-    hasher.input(point_bytes);
-    let hash_point_bytes = hasher.result();
-    let hash_point_compressed = edwards::CompressedEdwardsY::from_slice(&hash_point_bytes);
-    // TODO: This panics if it is none, handle properly
-    let hash_point = hash_point_compressed.decompress().unwrap();
+fn ristretto_point_hash(point: ristretto::RistrettoPoint) -> ristretto::RistrettoPoint {
+    let point_bytes: [u8; 32] = point.compress().to_bytes();
+    let hash_point = ristretto::RistrettoPoint::hash_from_bytes::<Keccak512>(&point_bytes);
     hash_point
 }
 
+fn ristretto_ring_point_hash(ristretto_public_ring: [ristretto::RistrettoPoint; 10]) -> ristretto::RistrettoPoint {
+    let mut point_bytes: [u8; 32*10] = [0u8; 32*10];
+    for i in 0..10 {
+        for j in 0..32 {
+            point_bytes[i*j] = ristretto_public_ring[i].compress().to_bytes()[j];
+        }
+    }
+    ristretto::RistrettoPoint::hash_from_bytes::<Keccak512>(&point_bytes)
+}
+
+fn challenge_hash(
+        ristretto_public_ring: [ristretto::RistrettoPoint; 10],
+        message: [u8; 32],
+        key_image: ristretto::RistrettoPoint,
+        response_point: ristretto::RistrettoPoint,
+        response_image: ristretto::RistrettoPoint) -> [u8; 32] {
+    let mut hasher = Keccak256::new();
+    for pubkey in ristretto_public_ring.iter() {
+        hasher.input(pubkey.compress().to_bytes());
+    }
+    hasher.input(message);
+    hasher.input(key_image.compress().to_bytes());
+    hasher.input(response_point.compress().to_bytes());
+    hasher.input(response_image.compress().to_bytes());
+    let mut hash_point_bytes: [u8; 32] = hasher.result().as_slice().try_into().expect("wrong length");
+    hash_point_bytes
+}
+
+fn ring_sig(message: [u8; 32], secret: scalar::Scalar, ristretto_public_ring: [ristretto::RistrettoPoint; 10]) {
+    let G = constants::RISTRETTO_BASEPOINT_POINT;
+    let mut _secret =  [0u8; 64];
+    OsRng.fill_bytes(&mut _secret);
+    let ring_point_hash = ristretto_ring_point_hash(ristretto_public_ring);
+    let key_image = secret * ring_point_hash;
+    let ring_alpha = scalar::Scalar::from_bytes_mod_order_wide(&[OsRng.next_u64() as u8; 64]);
+    let response_ring: [scalar::Scalar; 10] = [scalar::Scalar::from_bytes_mod_order_wide(&[OsRng.next_u64() as u8; 64]); 10];
+    let alpha_point = ring_alpha * G;
+    let alpha_image = ring_alpha * ristretto_ring_point_hash(ristretto_public_ring);
+    let c_1 = challenge_hash(ristretto_public_ring, message, key_image, alpha_point, alpha_image);
+}
+
 fn main() {
-    let G = constants::ED25519_BASEPOINT_POINT;
-    let H = point_hash(G);
-        let secret: [u8; 64] = [99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 9, 9, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99];
-    let secret_scalar = scalar::Scalar::from_bytes_mod_order_wide(&secret);
-    let pubkey = secret_scalar * G;
-    let key_image = secret_scalar; //* point_hash(pubkey);
-
-    let mut csprng = OsRng{};
-    let keypair1: Keypair = Keypair::generate(&mut csprng);
-
-    let message: &[u8] = b"This is a test of the tsunami alert system.";
-    let signature: Signature = keypair1.sign(message);
-
-    assert!(keypair1.verify(message, &signature).is_ok());
+    let G_RISTRETTO = constants::RISTRETTO_BASEPOINT_POINT;
+    let H  = ristretto_point_hash(G_RISTRETTO);
+    let message: [u8; 32] = [0u8; 32];
+    let ristretto_secret_ring: [scalar::Scalar; 10] = [scalar::Scalar::from_bytes_mod_order_wide(&[OsRng.next_u64() as u8; 64]); 10];
+    let mut ristretto_public_ring: [ristretto::RistrettoPoint; 10] = [ristretto::RistrettoPoint::from_uniform_bytes(&[0u8;64]); 10];
+    for i in 0..10 {
+        ristretto_public_ring[i] = ristretto_secret_ring[i] * G_RISTRETTO;
+    }
+    ring_sig(message, ristretto_secret_ring[0], ristretto_public_ring);
 }
 
 

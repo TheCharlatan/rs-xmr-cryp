@@ -78,6 +78,10 @@ fn ring_sig_verify(
         responses: [scalar::Scalar; 10],
         ristretto_public_ring: [ristretto::RistrettoPoint; 10],
         key_image: ristretto::RistrettoPoint) {
+    // check for shenanigans against the key image
+    if(constants::BASEPOINT_ORDER * key_image != ristretto::RistrettoPoint::from_uniform_bytes(&[0u8;64])) {
+        panic!();
+    }
     let G = constants::RISTRETTO_BASEPOINT_POINT;
     let ring_point_hash = ristretto_ring_point_hash(ristretto_public_ring);
     let mut challenges: [scalar::Scalar; 10] = [scalar::Scalar::from_bytes_mod_order([0u8; 32]); 10];
@@ -91,7 +95,10 @@ fn ring_sig_verify(
     let verification_point = responses[9] * G + challenges[9] * ristretto_public_ring[9];
     let verification_image = responses[9] * ring_point_hash + challenges[9] * key_image;
     challenges[0] = challenge_hash(ristretto_public_ring, message, key_image, verification_point, verification_image);
-    assert!(challenges[0] == challenge);
+    // check that the ring has indeed been closed
+    if(challenges[0] != challenge) {
+        panic!();
+    }
     println!("{:?} == {:?}", challenges[0], challenge)
 }
 
@@ -107,5 +114,4 @@ fn main() {
     let (challenge, responses, key_image) = ring_sig(0, message, ristretto_secret_ring[0], ristretto_public_ring);
     ring_sig_verify(message, challenge, responses, ristretto_public_ring, key_image);
 }
-
 

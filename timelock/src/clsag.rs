@@ -14,7 +14,7 @@ use sha3::{Digest, Keccak256, Keccak512};
 
 use std::convert::TryInto;
 
-pub const RINGSIZE: usize = 10;
+pub const RINGSIZE: usize = 3;
 pub const G: ristretto::RistrettoPoint = constants::RISTRETTO_BASEPOINT_POINT;
 
 pub fn ristretto_point_hash(point: ristretto::RistrettoPoint) -> ristretto::RistrettoPoint {
@@ -27,7 +27,7 @@ pub fn random_scalar() -> scalar::Scalar {
     return scalar::Scalar::from_bytes_mod_order_wide(&[OsRng.next_u64() as u8; 64]);
 }
 
-fn challenge_hash(
+fn aggregate_hash(
     index: u8,
     public_ring: [ristretto::RistrettoPoint; RINGSIZE],
     key_image: ristretto::RistrettoPoint,
@@ -51,12 +51,12 @@ fn challenge_hash(
     }
     hasher.input(timelock_image.compress().to_bytes());
 
-    let challenge_hash_bytes: [u8; 32] =
+    let aggregate_hash_bytes: [u8; 32] =
         hasher.result().as_slice().try_into().expect("wrong length");
-    scalar::Scalar::from_bytes_mod_order(challenge_hash_bytes)
+    scalar::Scalar::from_bytes_mod_order(aggregate_hash_bytes)
 }
 
-fn ring_hash(
+fn challenge_hash(
     public_ring: [ristretto::RistrettoPoint; RINGSIZE],
     amount_ring: [ristretto::RistrettoPoint; RINGSIZE],
     timelock_ring: [ristretto::RistrettoPoint; RINGSIZE],
@@ -77,8 +77,8 @@ fn ring_hash(
     hasher.input(message);
     hasher.input(L.compress().to_bytes());
     hasher.input(R.compress().to_bytes());
-    let ring_hash_bytes: [u8; 32] = hasher.result().as_slice().try_into().expect("wrong length");
-    scalar::Scalar::from_bytes_mod_order(ring_hash_bytes)
+    let challenge_hash_bytes: [u8; 32] = hasher.result().as_slice().try_into().expect("wrong length");
+    scalar::Scalar::from_bytes_mod_order(challenge_hash_bytes)
 }
 
 pub fn clsag_sign(
@@ -103,8 +103,8 @@ pub fn clsag_sign(
     let timelock_image = ristretto_point_hash(public_ring[privkey_index]) * timelock_privkey;
 
     //construct challenges
-    let mu_privkey = challenge_hash(
-        0,
+    let mu_privkey = aggregate_hash(
+        0, // has domain separator
         public_ring,
         privkey_image,
         amount_ring,
@@ -112,7 +112,7 @@ pub fn clsag_sign(
         timelock_ring,
         timelock_image,
     );
-    let mu_amount = challenge_hash(
+    let mu_amount = aggregate_hash(
         1,
         public_ring,
         privkey_image,
@@ -121,7 +121,7 @@ pub fn clsag_sign(
         timelock_ring,
         timelock_image,
     );
-    let mu_timelock = challenge_hash(
+    let mu_timelock = aggregate_hash(
         2,
         public_ring,
         privkey_image,
@@ -132,35 +132,35 @@ pub fn clsag_sign(
     );
 
     let alpha = random_scalar();
-    let mut h: [scalar::Scalar; RINGSIZE] =
+    let mut challenges: [scalar::Scalar; RINGSIZE] =
         [scalar::Scalar::from_bytes_mod_order_wide(&[0u8; 64]); RINGSIZE];
     let mut s: [scalar::Scalar; RINGSIZE] = [random_scalar(); RINGSIZE];
 
     // generate "critical" (our) ring element
     let mut R = alpha * ristretto_point_hash(public_ring[privkey_index]);
     let mut L = alpha * G;
-    h[((privkey_index + 1) % RINGSIZE)] =
-        ring_hash(public_ring, amount_ring, timelock_ring, message, L, R);
+    challenges[((privkey_index + 1) % RINGSIZE)] =
+        challenge_hash(public_ring, amount_ring, timelock_ring, message, L, R);
 
     // generate the ring
-    for mut i in privkey_index + 1..privkey_index + RINGSIZE {
+    for mut i in (privkey_index + 1) .. (privkey_index + RINGSIZE) {
         i = i % RINGSIZE;
         L = s[i] * G
-            + (h[i] * mu_privkey) * public_ring[i]
-            + (h[i] * mu_amount) * amount_ring[i]
-            + (h[i] * mu_timelock) * timelock_ring[i];
+            + (challenges[i] * mu_privkey) * public_ring[i]
+            + (challenges[i] * mu_amount) * amount_ring[i]
+            + (challenges[i] * mu_timelock) * timelock_ring[i];
         R = s[i] * ristretto_point_hash(public_ring[i])
-            + (h[i] * mu_privkey) * privkey_image
-            + (h[i] * mu_amount) * amount_image
-            + (h[i] * mu_timelock) * timelock_image;
-        h[(i + 1) % RINGSIZE] = ring_hash(public_ring, amount_ring, timelock_ring, message, L, R);
+            + (challenges[i] * mu_privkey) * privkey_image
+            + (challenges[i] * mu_amount) * amount_image
+            + (challenges[i] * mu_timelock) * timelock_image;
+        challenges[(i + 1) % RINGSIZE] = challenge_hash(public_ring, amount_ring, timelock_ring, message, L, R);
     }
 
     // close the ring and return the signature data
     s[privkey_index] = alpha
-        - h[privkey_index]
+        - challenges[privkey_index]
             * (mu_privkey * privkey + mu_amount * amount_privkey + mu_timelock * timelock_privkey);
-    (h[0], s, privkey_image, amount_image, timelock_image)
+    (challenges[0], s, privkey_image, amount_image, timelock_image)
 }
 
 pub fn clsag_verify(
@@ -168,19 +168,19 @@ pub fn clsag_verify(
     public_ring: [ristretto::RistrettoPoint; RINGSIZE],
     amount_ring: [ristretto::RistrettoPoint; RINGSIZE],
     timelock_ring: [ristretto::RistrettoPoint; RINGSIZE],
-    h_0: scalar::Scalar,
+    challenge_0: scalar::Scalar,
     s: [scalar::Scalar; RINGSIZE],
     privkey_image: ristretto::RistrettoPoint,
     amount_image: ristretto::RistrettoPoint,
     timelock_image: ristretto::RistrettoPoint,
 ) {
     // initialize the ring structure
-    let mut h: [scalar::Scalar; RINGSIZE] =
+    let mut challenges: [scalar::Scalar; RINGSIZE] =
         [scalar::Scalar::from_bytes_mod_order_wide(&[0u8; 64]); RINGSIZE];
-    h[0] = h_0;
+    challenges[0] = challenge_0;
 
     // initalize the challenges
-    let mu_privkey = challenge_hash(
+    let mu_privkey = aggregate_hash(
         0,
         public_ring,
         privkey_image,
@@ -189,7 +189,7 @@ pub fn clsag_verify(
         timelock_ring,
         timelock_image,
     );
-    let mu_amount = challenge_hash(
+    let mu_amount = aggregate_hash(
         1,
         public_ring,
         privkey_image,
@@ -198,7 +198,7 @@ pub fn clsag_verify(
         timelock_ring,
         timelock_image,
     );
-    let mu_timelock = challenge_hash(
+    let mu_timelock = aggregate_hash(
         2,
         public_ring,
         privkey_image,
@@ -211,18 +211,19 @@ pub fn clsag_verify(
     // generate the ring
     for i in 0..RINGSIZE {
         let L = s[i] * G
-            + (h[i] * mu_privkey) * public_ring[i]
-            + (h[i] * mu_amount) * amount_ring[i]
-            + (h[i] * mu_timelock) * timelock_ring[i];
+            + (challenges[i] * mu_privkey) * public_ring[i]
+            + (challenges[i] * mu_amount) * amount_ring[i]
+            + (challenges[i] * mu_timelock) * timelock_ring[i];
         let R = s[i] * ristretto_point_hash(public_ring[i])
-            + (h[i] * mu_privkey) * privkey_image
-            + (h[i] * mu_amount) * amount_image
-            + (h[i] * mu_timelock) * timelock_image;
-        h[(i + 1) % RINGSIZE] = ring_hash(public_ring, amount_ring, timelock_ring, message, L, R);
+            + (challenges[i] * mu_privkey) * privkey_image
+            + (challenges[i] * mu_amount) * amount_image
+            + (challenges[i] * mu_timelock) * timelock_image;
+        challenges[(i + 1) % RINGSIZE] = challenge_hash(public_ring, amount_ring, timelock_ring, message, L, R);
     }
 
     // verify that the ring is closed
-    if h[0] != h_0 {
+    if challenges[0] != challenge_0 {
+        print!("Incoming: {:?}\n outgoing: {:?}]\n", challenge_0.to_bytes(), challenges[0].to_bytes());
         panic!();
     }
 }

@@ -47,7 +47,7 @@ fn main() {
     // ammount commitment keys
     let amount_privkey = random_scalar();
     let mut amount_ring: [ristretto::RistrettoPoint; RINGSIZE] = [random_point(); RINGSIZE];
-    amount_ring[privkey_index] = privkey * G;
+    amount_ring[privkey_index] = amount_privkey * G;
     // timelock commitment keys
     let unlock_time = scalar::Scalar::from_bytes_mod_order([4u8; 32]);
     let unlock_time_blind = random_scalar();
@@ -81,6 +81,10 @@ fn main() {
             + unlock_time_diff_blind * G
     }
 
+    let test_timelock_privkey = random_scalar();
+    let mut test_timelock_ring: [ristretto::RistrettoPoint; RINGSIZE] = [random_point(); RINGSIZE];
+    test_timelock_ring[privkey_index] = test_timelock_privkey * G;
+
     // sign it
     let (challenge, responses, key_image, amount_image, timelock_image) = clsag_sign(
         privkey_index,
@@ -89,15 +93,15 @@ fn main() {
         public_ring,
         amount_privkey,
         amount_ring,
-        unlock_time_blind + unlock_time_diff_blind,
-        sig_timelock_ring,
+        test_timelock_privkey,
+        test_timelock_ring,
     );
 
     clsag_verify(
         message,
         public_ring,
         amount_ring,
-        sig_timelock_ring,
+        test_timelock_ring,
         challenge,
         responses,
         key_image,

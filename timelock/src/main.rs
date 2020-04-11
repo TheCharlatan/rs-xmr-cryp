@@ -78,12 +78,7 @@ fn main() {
     let mut sig_timelock_ring: [ristretto::RistrettoPoint; RINGSIZE] = [random_point(); RINGSIZE];
     for i in 0..RINGSIZE {
         sig_timelock_ring[i] = (timelock_ring[i] + unlock_time_diff) - unlock_time_aux * H()
-            + unlock_time_diff_blind * G
     }
-
-    let test_timelock_privkey = random_scalar();
-    let mut test_timelock_ring: [ristretto::RistrettoPoint; RINGSIZE] = [random_point(); RINGSIZE];
-    test_timelock_ring[privkey_index] = test_timelock_privkey * G;
 
     // sign it
     let (challenge, responses, key_image, amount_image, timelock_image) = clsag_sign(
@@ -93,19 +88,28 @@ fn main() {
         public_ring,
         amount_privkey,
         amount_ring,
-        test_timelock_privkey,
-        test_timelock_ring,
+        unlock_time_blind + unlock_time_diff_blind,
+        sig_timelock_ring,
     );
 
     clsag_verify(
         message,
         public_ring,
         amount_ring,
-        test_timelock_ring,
+        sig_timelock_ring,
         challenge,
         responses,
         key_image,
         amount_image,
         timelock_image,
     );
+
+    let mut verifier_transcript = Transcript::new(b"locktime example");
+    assert!(
+        proof
+            .verify_single(&bp_gens, &pc_gens, &mut verifier_transcript, &committed_value, 32)
+            .is_ok()
+    );
+
+
 }

@@ -9,7 +9,7 @@ use sha3::{Digest, Keccak256};
 
 use std::convert::TryInto;
 
-use crate::rct_utils::{G, RINGSIZE, ristretto_point_hash, random_scalar};
+use crate::rct_utils::{G, RINGSIZE, ristretto_point_hash, random_scalar, empty_scalar};
 
 pub struct Signature {
     // first 
@@ -121,8 +121,7 @@ pub fn clsag_sign(
     );
 
     let alpha = random_scalar();
-    let mut challenges: [scalar::Scalar; RINGSIZE] =
-        [scalar::Scalar::from_bytes_mod_order_wide(&[0u8; 64]); RINGSIZE];
+    let mut challenges: [scalar::Scalar; RINGSIZE] = [empty_scalar(); RINGSIZE];
     let mut s: [scalar::Scalar; RINGSIZE] = [random_scalar(); RINGSIZE];
 
     // generate "critical" (our) ring element
@@ -166,8 +165,7 @@ pub fn clsag_verify(
     sig: Signature,
 ) {
     // initialize the ring structure
-    let mut challenges: [scalar::Scalar; RINGSIZE] =
-        [scalar::Scalar::from_bytes_mod_order_wide(&[0u8; 64]); RINGSIZE];
+    let mut challenges: [scalar::Scalar; RINGSIZE] = [empty_scalar(); RINGSIZE];
     challenges[0] = sig.challenge_0;
 
     // initalize the challenges

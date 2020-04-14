@@ -16,7 +16,7 @@ use sha3::{Keccak512};
 * some utility functions and constants for EC crypto ops
 */
 
-pub const RINGSIZE: usize = 3;
+pub const RINGSIZE: usize = 10;
 pub const G: ristretto::RistrettoPoint = constants::RISTRETTO_BASEPOINT_POINT;
 
 pub fn ristretto_point_hash(point: ristretto::RistrettoPoint) -> ristretto::RistrettoPoint {
@@ -31,6 +31,14 @@ pub fn random_scalar() -> scalar::Scalar {
 
 pub fn random_point() -> ristretto::RistrettoPoint {
     return ristretto::RistrettoPoint::from_uniform_bytes(&[OsRng.next_u64() as u8; 64]);
+}
+
+pub fn empty_scalar() -> scalar::Scalar {
+    return scalar::Scalar::from_bytes_mod_order([0u8; 32]);
+}
+
+pub fn empty_point() -> ristretto::RistrettoPoint {
+    return ristretto::RistrettoPoint::from_uniform_bytes(&[0u8; 64]);
 }
 
 pub fn H() -> ristretto::RistrettoPoint {
@@ -48,12 +56,20 @@ pub fn u64_to_32_bytes_u8_array(number: u64) -> [u8; 32] {
     data
 }
 
+pub fn u64_to_scalar(number: u64) -> scalar::Scalar {
+    return scalar::Scalar::from_bytes_mod_order(u64_to_32_bytes_u8_array(number));
+}
+
 pub fn bytes_u8_array_to_u64(data: [u8; 32]) -> u64 {
     let mut bytes = [0u8;8];
     for i in 0..8 {
         bytes[i] = data[i];
     }
     u64::from_le_bytes(bytes)
+}
+
+pub fn scalar_to_u64(scalar_element: scalar::Scalar) -> u64 {
+    return bytes_u8_array_to_u64(scalar_element.to_bytes());
 }
 
 #[cfg(test)]
@@ -72,6 +88,12 @@ mod tests {
         let number: u64 = 185404040293423;
         let scalar = scalar::Scalar::from_bytes_mod_order(u64_to_32_bytes_u8_array(number));
         assert_eq!(number, bytes_u8_array_to_u64(scalar.to_bytes()));
+    }
+
+    #[test]
+    fn test_scalar_convertion() {
+        let number: u64 = 18345678999999999999u64;
+        assert_eq!(number, scalar_to_u64(u64_to_scalar(number)));
     }
 }
 

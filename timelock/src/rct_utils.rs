@@ -29,9 +29,9 @@ pub fn random_scalar() -> scalar::Scalar {
     return scalar::Scalar::from_bytes_mod_order_wide(&[OsRng.next_u64() as u8; 64]);
 }
 
-pub fn random_point() -> ristretto::RistrettoPoint {
-    return ristretto::RistrettoPoint::from_uniform_bytes(&[OsRng.next_u64() as u8; 64]);
-}
+//pub fn random_point() -> ristretto::RistrettoPoint {
+//    return ristretto::RistrettoPoint::from_uniform_bytes(&[OsRng.next_u64() as u8; 64]);
+//}
 
 pub fn empty_scalar() -> scalar::Scalar {
     return scalar::Scalar::from_bytes_mod_order([0u8; 32]);

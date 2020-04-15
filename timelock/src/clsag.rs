@@ -162,7 +162,7 @@ pub fn clsag_verify(
     public_ring: [ristretto::RistrettoPoint; RINGSIZE],
     amount_ring: [ristretto::RistrettoPoint; RINGSIZE],
     locktime_ring: [ristretto::RistrettoPoint; RINGSIZE],
-    sig: Signature,
+    sig: &Signature,
 ) {
     // initialize the ring structure
     let mut challenges: [scalar::Scalar; RINGSIZE] = [empty_scalar(); RINGSIZE];

@@ -18,21 +18,15 @@ mod clsag;
 use clsag::{Signature, clsag_sign, clsag_verify};
 
 mod rct_utils;
-use rct_utils::{random_point, empty_point, random_scalar, empty_scalar, G, H, RINGSIZE, u64_to_scalar, scalar_to_u64};
-
-const BITS: usize = 4;
-
-struct Bulletproof {
-    proof: RangeProof,
-    committed_value: ristretto::CompressedRistretto,
-}
+use rct_utils::{empty_point, random_scalar, empty_scalar, G, H, RINGSIZE, u64_to_scalar, scalar_to_u64};
 
 struct Input {
     ring_member_offsets: [u8; RINGSIZE],
     // contains challenge, responses and key images
     signature: Signature,
     pseudo_amount_commitment: ristretto::RistrettoPoint,
-    locktime_range_proof: Bulletproof,
+    pseudo_locktime_commitment: ristretto::RistrettoPoint,
+    locktime_range_proof: RangeProof,
     locktime_aux: u64,
 }
 
@@ -42,19 +36,19 @@ struct Output {
     amount_commitment: ristretto::RistrettoPoint,
     amount: u64,
     amount_blind: scalar::Scalar,
-    amount_range_proof: Bulletproof,
+    amount_range_proof: RangeProof,
 }
 
 struct Transaction {
     // first follow the things available to the verifier
-    fee: u64,
+    // Remove the fee for now
+    // fee: u64,
     inputs: Vec<Input>,
     outputs: Vec<Output>,
     // then what is available to the signer
     locktime: u64, 
     locktime_blind: scalar::Scalar,
     locktime_commitment: ristretto::RistrettoPoint,
-    pseudo_locktime_commitment: ristretto::RistrettoPoint,
 }
 
 fn generate_fake_tx() -> Transaction {
@@ -62,7 +56,7 @@ fn generate_fake_tx() -> Transaction {
     let pc_gens = PedersenGens::default();
     let secret_value = 1037578891u64;
     let mut prover_transcript = Transcript::new(b"locktime example");
-    let (proof, committed_value) = RangeProof::prove_single(
+    let (proof, _) = RangeProof::prove_single(
         &bp_gens,
         &pc_gens,
         &mut prover_transcript,
@@ -88,13 +82,13 @@ fn generate_fake_tx() -> Transaction {
             locktime_image: empty_point(),
         },
         pseudo_amount_commitment: empty_point(),
-        locktime_range_proof:Bulletproof {
-            proof: proof,
-            committed_value: committed_value,
-        },
+        pseudo_locktime_commitment: empty_point(),
+        locktime_range_proof: proof,
         locktime_aux: 0,
     };
-    let (proof, committed_value) = RangeProof::prove_single(
+    // normally returns proof and committed_value as a compressed Ristretto point, but we don't
+    // need the commitment
+    let (proof, _) = RangeProof::prove_single(
         &bp_gens,
         &pc_gens,
         &mut prover_transcript,
@@ -110,17 +104,12 @@ fn generate_fake_tx() -> Transaction {
         amount_commitment: u64_to_scalar(amount) * H() + amount_blind * G,
         amount: amount,
         amount_blind: amount_blind,
-        amount_range_proof: Bulletproof {
-            proof: proof,
-            committed_value: committed_value,
-        },
+        amount_range_proof: proof,
     };
 
     Transaction {
-        fee: 1,
         locktime: locktime,
         locktime_blind: locktime_blind,
-        pseudo_locktime_commitment: random_point(),
         locktime_commitment: u64_to_scalar(locktime) * H() + locktime_blind * G,
         inputs: vec![input],
         outputs: vec![output],
@@ -201,7 +190,7 @@ fn main() {
     let secret_value = scalar_to_u64(input_locktime_aux) - scalar_to_u64(input_locktime);
     let mut prover_transcript = Transcript::new(b"locktime example");
     let input_locktime_pseudo_blind_negative = u64_to_scalar(0u64) - input_locktime_pseudo_blind;
-    let (proof, committed_value) = RangeProof::prove_single(
+    let (locktime_range_proof, _) = RangeProof::prove_single(
         &bp_gens,
         &pc_gens,
         &mut prover_transcript,
@@ -212,7 +201,6 @@ fn main() {
     .expect("I promise this will totally never fail");
 
     // generate CLSAG signature
-    // sign it
     let signature: Signature = clsag_sign(
         privkey_index,
         message,
@@ -224,19 +212,87 @@ fn main() {
         input_locktime_pseudo_ring,
     );
 
+    let input = Input {
+        ring_member_offsets: ring_member_offsets,
+        signature: signature,
+        pseudo_amount_commitment: input_amount_pseudo_commitment,
+        pseudo_locktime_commitment: input_locktime_pseudo_commitment,
+        locktime_range_proof: locktime_range_proof,
+        locktime_aux: scalar_to_u64(input_locktime_aux),
+    };
+
+    // output amount commitment
+    let output_amount = input_amount;
+    let output_amount_blind = random_scalar();
+    let output_amount_commitment = input_amount * H() + output_amount_blind * G;
+    let (output_amount_range_proof, output_amount_committed_value) = RangeProof::prove_single(
+        &bp_gens,
+        &pc_gens,
+        &mut prover_transcript,
+        scalar_to_u64(output_amount),
+        &output_amount_blind,
+        32,
+    )
+    .expect("I promise this will totally never fail");
+    assert_eq!(output_amount_commitment.compress(), output_amount_committed_value);
+    
+    let privkey = random_scalar();
+    let output = Output {
+        one_time_pubkey: privkey * G,
+        one_time_privkey: privkey,
+        amount_commitment: output_amount * H() + output_amount_blind * G,
+        amount: scalar_to_u64(output_amount),
+        amount_blind: output_amount_blind,
+        amount_range_proof: output_amount_range_proof,
+    };
+
+    let tx_locktime = 10u64;
+    let tx_locktime_blind = random_scalar();
+
+    let tx = Transaction {
+        locktime: tx_locktime,
+        locktime_blind: tx_locktime_blind,
+        locktime_commitment: u64_to_scalar(tx_locktime) * H() + tx_locktime_blind * G,
+        inputs: vec![input],
+        outputs: vec![output],
+    };
+
+    // now verify the transaction with just the public information available
+
+    let mut verify_public_ring: [ristretto::RistrettoPoint; RINGSIZE] = [empty_point(); RINGSIZE];
+    let mut verify_input_amount_ring: [ristretto::RistrettoPoint; RINGSIZE] = [empty_point(); RINGSIZE];
+    let mut verify_input_locktime_ring: [ristretto::RistrettoPoint; RINGSIZE] = [empty_point(); RINGSIZE];
+    let mut k = 0;
+
+    for index in tx.inputs[0].ring_member_offsets.iter() {
+        let i = *index as usize;
+        let transaction = &fake_txs[i];
+        verify_public_ring[k] = transaction.outputs[0].one_time_pubkey;
+        verify_input_amount_ring[k] = transaction.outputs[0].amount_commitment - tx.inputs[0].pseudo_amount_commitment;
+        verify_input_locktime_ring[k] = transaction.locktime_commitment - tx.inputs[0].pseudo_locktime_commitment;
+        k += 1;
+    }
+
     clsag_verify(
         message,
-        public_ring, // as collected from ring_member_offsets
-        input_amount_pseudo_ring, // as collected from ring_member_offsets - input_amount_pseudo_commitment
-        input_locktime_pseudo_ring, // as collected from ring_member_offsets - input_locktime_pseudo_commitment
-        signature,
+        verify_public_ring, // as collected from ring_member_offsets
+        verify_input_amount_ring, // as collected from ring_member_offsets - input_amount_pseudo_commitment
+        verify_input_locktime_ring, // as collected from ring_member_offsets - input_locktime_pseudo_commitment
+        &tx.inputs[0].signature,
     );
 
     let mut verifier_transcript = Transcript::new(b"locktime example");
-    let proof_commitment = (input_locktime_aux * H() - input_locktime_pseudo_commitment).compress();
+    let locktime_proof_commitment = (u64_to_scalar(tx.inputs[0].locktime_aux) * H() - tx.inputs[0].pseudo_locktime_commitment).compress();
     assert!(
-        proof
-            .verify_single(&bp_gens, &pc_gens, &mut verifier_transcript, &proof_commitment, 32)
+        tx.inputs[0].locktime_range_proof
+            .verify_single(&bp_gens, &pc_gens, &mut verifier_transcript, &locktime_proof_commitment, 32)
+            .is_ok()
+    );
+
+    let amount_proof_commitment = tx.outputs[0].amount_commitment.compress();
+    assert!(
+        tx.outputs[0].amount_range_proof
+            .verify_single(&bp_gens, &pc_gens, &mut verifier_transcript, &amount_proof_commitment, 32)
             .is_ok()
     );
 }

@@ -16,7 +16,7 @@ use sha3::{Keccak512};
 * some utility functions and constants for EC crypto ops
 */
 
-pub const RINGSIZE: usize = 10;
+pub const RINGSIZE: usize = 5;
 pub const G: ristretto::RistrettoPoint = constants::RISTRETTO_BASEPOINT_POINT;
 
 pub fn ristretto_point_hash(point: ristretto::RistrettoPoint) -> ristretto::RistrettoPoint {
@@ -95,5 +95,13 @@ mod tests {
         let number: u64 = 18345678999999999999u64;
         assert_eq!(number, scalar_to_u64(u64_to_scalar(number)));
     }
+
+    // #[test]
+    // fn test_bulletproof_generator_params() {
+    //     let pc_gens = PedersenGens {B: H(), B_blinding: G};
+    //     let pc_commitment = pc_gens.commit(input_locktime, input_locktime_blind);
+    //     let commitment = input_locktime * H() + input_locktime_blind * G;
+    //     assert_eq!(pc_commitment.compress().to_bytes(), commitment.compress().to_bytes());
+    // }
 }
 

@@ -18,7 +18,7 @@ mod clsag;
 use clsag::{Signature, clsag_sign, clsag_verify};
 
 mod rct_utils;
-use rct_utils::{random_point, empty_point, random_scalar, empty_scalar, G, H, RINGSIZE, u64_to_scalar};
+use rct_utils::{random_point, empty_point, random_scalar, empty_scalar, G, H, RINGSIZE, u64_to_scalar, scalar_to_u64};
 
 const BITS: usize = 4;
 
@@ -178,33 +178,35 @@ fn main() {
     // generate amount pseudo commitment and ring as will be used in the signature and transaction input
     let input_amount_pseudo_blind = random_scalar();
     let input_amount_pseudo_commitment = input_amount * H() + input_amount_pseudo_blind * G;
-    let mut input_amount_pseudo_ring: [ristretto::RistrettoPoint; RINGSIZE] = [random_point(); RINGSIZE];
+    let mut input_amount_pseudo_ring: [ristretto::RistrettoPoint; RINGSIZE] = [empty_point(); RINGSIZE];
     for i in 0..RINGSIZE {
         input_amount_pseudo_ring[i] = input_amount_ring[i] - input_amount_pseudo_commitment;
     }
 
-    // choose an auxiliary time in the locktime
-    let locktime_aux = u64_to_scalar(6u64);
-    let locktime_diff_blind = random_scalar();
-    let locktime_diff = (locktime_aux - input_locktime) * H() + (locktime_diff_blind * G);
-    
-    // generate pseudo output commitments
-    let mut sig_locktime_ring: [ristretto::RistrettoPoint; RINGSIZE] = [random_point(); RINGSIZE];
+    // generate locktime pseudo commitment and ring as will be used in the signature and
+    // transaction input
+    let input_locktime_pseudo_blind = random_scalar();
+    let input_locktime_pseudo_commitment = input_locktime * H() + input_locktime_pseudo_blind * G;
+    let mut input_locktime_pseudo_ring: [ristretto::RistrettoPoint; RINGSIZE] = [empty_point(); RINGSIZE];
     for i in 0..RINGSIZE {
-        sig_locktime_ring[i] = (input_locktime_ring[i] + locktime_diff) - locktime_aux * H()
+        input_locktime_pseudo_ring[i] = input_locktime_ring[i] - input_locktime_pseudo_commitment;
     }
 
-    // generate 64bit range proof
+    // choose an auxiliary locktime that will be communicated in plaintext
+    let input_locktime_aux = u64_to_scalar(16u64);
+    // generate 64bit range proof for locktime commitment
     let bp_gens = BulletproofGens::new(64, 1);
-    let pc_gens = PedersenGens::default();
-    let secret_value = 1037578891u64;
+    let pc_gens = PedersenGens {B: H(), B_blinding: G};
+    // prove that the auxiliary locktime is lower than the input_locktime
+    let secret_value = scalar_to_u64(input_locktime_aux) - scalar_to_u64(input_locktime);
     let mut prover_transcript = Transcript::new(b"locktime example");
+    let input_locktime_pseudo_blind_negative = u64_to_scalar(0u64) - input_locktime_pseudo_blind;
     let (proof, committed_value) = RangeProof::prove_single(
         &bp_gens,
         &pc_gens,
         &mut prover_transcript,
         secret_value,
-        &locktime_diff_blind,
+        &input_locktime_pseudo_blind_negative,
         32,
     )
     .expect("I promise this will totally never fail");
@@ -218,22 +220,23 @@ fn main() {
         public_ring,
         input_amount_blind - input_amount_pseudo_blind,
         input_amount_pseudo_ring,
-        input_locktime_blind + locktime_diff_blind,
-        sig_locktime_ring,
+        input_locktime_blind - input_locktime_pseudo_blind,
+        input_locktime_pseudo_ring,
     );
 
     clsag_verify(
         message,
-        public_ring,
-        input_amount_pseudo_ring,
-        sig_locktime_ring,
+        public_ring, // as collected from ring_member_offsets
+        input_amount_pseudo_ring, // as collected from ring_member_offsets - input_amount_pseudo_commitment
+        input_locktime_pseudo_ring, // as collected from ring_member_offsets - input_locktime_pseudo_commitment
         signature,
     );
 
     let mut verifier_transcript = Transcript::new(b"locktime example");
+    let proof_commitment = (input_locktime_aux * H() - input_locktime_pseudo_commitment).compress();
     assert!(
         proof
-            .verify_single(&bp_gens, &pc_gens, &mut verifier_transcript, &committed_value, 32)
+            .verify_single(&bp_gens, &pc_gens, &mut verifier_transcript, &proof_commitment, 32)
             .is_ok()
     );
 }

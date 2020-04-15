@@ -31,24 +31,28 @@ struct Input {
 }
 
 struct Output {
+    // information for verifier
     one_time_privkey: scalar::Scalar,
     one_time_pubkey: ristretto::RistrettoPoint,
     amount_commitment: ristretto::RistrettoPoint,
+    amount_range_proof: RangeProof,
+    // information for signer
     amount: u64,
     amount_blind: scalar::Scalar,
-    amount_range_proof: RangeProof,
 }
 
 struct Transaction {
-    // first follow the things available to the verifier
+    // information for verifier
     // Remove the fee for now
     // fee: u64,
     inputs: Vec<Input>,
     outputs: Vec<Output>,
-    // then what is available to the signer
+    locktime_commitment: ristretto::RistrettoPoint,
+    // this simulates the block height for now
+    transaction_time: u64,
+    // information for signer
     locktime: u64, 
     locktime_blind: scalar::Scalar,
-    locktime_commitment: ristretto::RistrettoPoint,
 }
 
 fn generate_fake_tx() -> Transaction {
@@ -113,6 +117,7 @@ fn generate_fake_tx() -> Transaction {
         locktime_commitment: u64_to_scalar(locktime) * H() + locktime_blind * G,
         inputs: vec![input],
         outputs: vec![output],
+        transaction_time: 0u64,
     }
 }
 
@@ -223,7 +228,7 @@ fn main() {
 
     // output amount commitment
     let output_amount = input_amount;
-    let output_amount_blind = random_scalar();
+    let output_amount_blind = input_amount_pseudo_blind;
     let output_amount_commitment = input_amount * H() + output_amount_blind * G;
     let (output_amount_range_proof, output_amount_committed_value) = RangeProof::prove_single(
         &bp_gens,
@@ -255,9 +260,12 @@ fn main() {
         locktime_commitment: u64_to_scalar(tx_locktime) * H() + tx_locktime_blind * G,
         inputs: vec![input],
         outputs: vec![output],
+        transaction_time: 0u64,
     };
 
     // now verify the transaction with just the public information available
+    
+    /* verify inputs */
 
     let mut verify_public_ring: [ristretto::RistrettoPoint; RINGSIZE] = [empty_point(); RINGSIZE];
     let mut verify_input_amount_ring: [ristretto::RistrettoPoint; RINGSIZE] = [empty_point(); RINGSIZE];
@@ -289,10 +297,18 @@ fn main() {
             .is_ok()
     );
 
+    // verify that the chosen is auxiliary time is younger than the transaction time
+    assert!( tx.transaction_time < tx.inputs[0].locktime_aux);
+
+    /* verify outputs */
+
     let amount_proof_commitment = tx.outputs[0].amount_commitment.compress();
     assert!(
         tx.outputs[0].amount_range_proof
             .verify_single(&bp_gens, &pc_gens, &mut verifier_transcript, &amount_proof_commitment, 32)
             .is_ok()
     );
+    
+    // verify that the amounts actually equal zero
+    assert_eq!((tx.inputs[0].pseudo_amount_commitment - tx.outputs[0].amount_commitment).compress().as_bytes(), &[0u8; 32]);
 }
